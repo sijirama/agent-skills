@@ -1,0 +1,74 @@
+# Coding Craft
+
+The difference between adequate and excellent code changes is rarely the algorithm. It's fit: fit to the codebase's existing patterns, fit to the actual (not imagined) requirements, and fit to the edge cases that really occur. This file covers how to achieve fit.
+
+## Reading Unfamiliar Code — the Order That Works
+
+1. **Entry point first.** Find where the behavior you care about *starts* (the route handler, the event listener, the CLI command) and trace forward. Reading files alphabetically or by directory builds a map of the wrong territory.
+2. **Follow the data, not the files.** Track one representative value through its lifecycle: where born, how transformed, where consumed. Architecture reveals itself along data paths.
+3. **Read one existing feature that resembles yours, end to end.** Before adding feature B, read sibling feature A completely — its route, its data access, its error handling, its tests. Your change should look like it was written by the same person on the same day.
+4. **Check the project's own documentation of itself**: CLAUDE.md, README, contributing guides, and the lint/type configs (they encode the team's actual rules).
+5. **Distrust names; verify semantics.** `isValid()` may mutate. `getUser()` may create one. Read the body of anything you depend on.
+
+## Before Writing: the Prior-Art Search
+
+The codebase almost certainly already solves parts of your problem. Before writing any new function, spend one search cycle:
+
+- Grep for the domain noun (`grep -ri "invoice"`) and the operation (`formatDate`, `retry`, `slugify`).
+- Check the utils/lib/helpers directories and the nearest neighbor module.
+- Check installed dependencies (`package.json` / lockfile) — the project may already ship a library for this; adding a competing one or hand-rolling it is a fit failure.
+
+Duplicating an existing helper is one of the most common and most avoidable defects in generated code.
+
+## API Verification Discipline
+
+Your memory of an API is a *hypothesis about a version you may not be using*.
+
+- For any external API you haven't verified **in this session**: check the installed version, then check the actual signature — read the type definitions in `node_modules` (or equivalent), the project's existing usage of the same API, or the docs for that exact version. Existing usage in the same repo is the best source: it's proven to work here.
+- Config file schemas, CLI flags, and framework conventions drift across major versions. A confident-from-memory `next.config.js` option or wrangler flag is exactly how plausible-looking broken code gets written.
+- When the repo already calls the API you need, copy the repo's calling convention, not your own.
+
+## Designing the Change
+
+- **Minimal surface, complete behavior.** Touch the fewest files/functions that fully solve the problem. Every additional touched line is review burden and regression surface. But "minimal" never means skipping the error path — incomplete-but-small is not the goal.
+- **No speculative generality.** Do not add parameters, options, abstraction layers, or "extensibility" for requirements that don't exist. The rule: abstractions are extracted from the *second or third* concrete use, never built for the first.
+- **Blast radius before edit.** Changing a function's behavior or signature? Grep every call site FIRST and read how each caller depends on current behavior. The regression you cause is nearly always in the caller you didn't look at. Same for changing shared types, env vars, and database columns.
+- **Choose the insertion point deliberately.** The right fix location is where the *invariant* lives, not where you happen to be. Validation belongs at the boundary where data enters; a default belongs where the value is defined, not at each use site.
+
+## Edge-Case Taxonomy — check each against your change
+
+Not every case applies to every change; scan the list and handle the ones that genuinely occur.
+
+- **Emptiness**: empty string, empty array, zero, null vs. undefined (they are different), missing key vs. key-with-null-value.
+- **Boundaries**: first and last element, off-by-one in ranges/slices (inclusive vs. exclusive ends), exactly-at-limit values, single-element collections.
+- **Cardinality surprises**: duplicates where uniqueness was assumed, more than one match for a "find one" query, zero rows.
+- **Text**: unicode beyond ASCII, emoji (multi-code-unit!), leading/trailing whitespace, case sensitivity, very long strings, strings that look like numbers.
+- **Numbers**: negative, zero, floating-point equality, integer overflow in other runtimes, string/number coercion at JSON boundaries.
+- **Time**: timezones (server vs. user vs. UTC), DST transitions, clock skew, month boundaries, date math across them, "today" being ambiguous.
+- **Async**: unawaited promises, two in-flight requests resolving out of order, component unmounted before response, retries causing duplicate side effects (idempotency), partial failure halfway through a multi-step operation.
+- **External calls**: the network call fails, times out, returns malformed data, or succeeds after your timeout fired. Every external call needs a story for each.
+- **Auth/state**: logged-out user hits the path, permissions changed mid-session, stale cached data, concurrent edits to the same row.
+
+## Matching Idiom
+
+Before writing, note in the surrounding code: naming convention, error-handling pattern (exceptions vs. result values vs. error codes), async style, how existing code imports things, comment density, test structure. Then match it — even where your personal preference differs. A technically-correct change in a foreign style is a worse change; it fragments the codebase and signals to reviewers that the author didn't read the surroundings.
+
+**Comment discipline:** write a comment only for what the code cannot say — a non-obvious constraint, a why, a link to the spec/issue that forced this shape. Never write comments that narrate the diff ("added null check"), address the reviewer ("this fixes the bug by..."), or restate the line below. Match the file's existing comment density.
+
+## Refactoring Safely
+
+- Refactor and behavior-change in **separate commits** (or at minimum, clearly separable diffs). A reviewer must be able to verify "this hunk changes nothing" independently of "this hunk changes X."
+- Before restructuring, secure a behavioral baseline: existing tests, or a quick characterization test/manual exercise capturing current behavior — including current *weird* behavior, which somebody may depend on.
+- Move in small verified steps: rename → verify; extract → verify; inline → verify. The big-bang restructure that "should be equivalent" is where regressions breed.
+- Do not bundle drive-by refactors into feature work. If you spot something worth restructuring, mention it; don't silently do it.
+
+## Completing the Change
+
+A change is complete when its *consequences* are handled, not just its center:
+
+- Second occurrences: the same bug/pattern elsewhere in the codebase (grep for it).
+- Callers, tests, types, docs, config, and fixtures affected by the change.
+- Migration story for any persisted data or public interface you altered.
+- Removal of your own scaffolding: debug logs, commented-out code, TODO(you) markers, unused imports the change orphaned.
+
+Then verify per `verification.md` — a change that hasn't been exercised is a draft, not a deliverable.
